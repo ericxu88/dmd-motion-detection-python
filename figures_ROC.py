@@ -50,7 +50,7 @@ for i in range(num_vids):
     for iter_, threshold in enumerate(vals):
         FPR[i, iter_], TPR[i, iter_] = ROC(Omega[i], threshold, frames[i], event_tol)
 
-AUC = abs(np.trapz(np.mean(FPR, axis=0), np.mean(TPR, axis=0)))
+AUC = abs(np.trapz(np.mean(TPR, axis=0), np.mean(FPR, axis=0)))
 print(f'AUC:  {AUC}')
 
 fig, ax = plt.subplots()
