@@ -2,9 +2,44 @@ import numpy as np
 import cv2
 
 
+def dmd_from_frames(frames_array, T, r, p):
+    """
+    Performs background/foreground separation on a pre-loaded array of frames,
+    combining compressed and sliding window DMD techniques.
+
+    Parameters
+    ----------
+    frames_array : ndarray, shape (num_frames, height, width)
+        Greyscale frames as float values.
+    T : int
+        Prescribed window width for sliding window DMD.
+    r : int
+        Target rank for the rank-reduction procedure.
+    p : int
+        Target dimensionality reduction for compressed DMD.
+
+    Returns
+    -------
+    X_background : ndarray, shape (height, width, num_frames)
+        Isolated background frames.
+    X_foreground : ndarray, shape (height, width, num_frames)
+        Isolated foreground frames.
+    video_full : ndarray, shape (height, width, num_frames)
+        Original greyscale video tensor.
+    Omega_continuous : ndarray, shape (r, num_windows)
+        Matrix of continuous (complex) eigenvalues per window.
+
+    Author: Marco Mignacca
+    """
+    num_frames, height, width = frames_array.shape
+    dim = height * width
+    video_mat = frames_array.reshape(num_frames, dim).T  # (dim, num_frames)
+    return _dmd_separation_core(video_mat, height, width, num_frames, T, r, p)
+
+
 def dmd_with_separation(video, T, r, p):
     """
-    Performs background/foreground separation on a video, combining
+    Performs background/foreground separation on a video file, combining
     compressed and sliding window DMD techniques.
 
     Parameters
@@ -25,7 +60,7 @@ def dmd_with_separation(video, T, r, p):
     X_foreground : ndarray, shape (height, width, num_frames)
         Isolated foreground frames.
     video_full : ndarray, shape (height, width, num_frames)
-        Original video as a greyscale tensor.
+        Original greyscale video tensor.
     Omega_continuous : ndarray, shape (r, num_windows)
         Matrix of continuous (complex) eigenvalues per window.
 
@@ -38,28 +73,29 @@ def dmd_with_separation(video, T, r, p):
     dim = height * width
 
     video_mat = np.zeros((dim, num_frames))
-
     for j in range(num_frames):
         ret, frame = cap.read()
         if not ret:
             break
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(float)
         video_mat[:, j] = gray.flatten()
-
     cap.release()
 
-    # Apply Sliding Window DMD
+    return _dmd_separation_core(video_mat, height, width, num_frames, T, r, p)
+
+
+def _dmd_separation_core(video_mat, height, width, num_frames, T, r, p):
+    """Shared DMD separation computation used by both public entry points."""
+    dim = height * width
     num_windows = num_frames - T
     x_bg = np.zeros((dim, num_frames), dtype=complex)
     GaussSum = np.zeros(num_frames)
     tgrid = np.arange(num_frames, dtype=float)
     sig = T / 8.0
 
-    # Create random measurement matrix and compress video
     C = np.random.randn(p, dim)
     video_comp = C @ video_mat
 
-    # Track eigenvalues per window
     Omega = np.zeros((r, num_windows))
     Omega_continuous = np.zeros((r, num_windows), dtype=complex)
 
@@ -79,8 +115,7 @@ def dmd_with_separation(video, T, r, p):
         eVals, eVecs = np.linalg.eig(Atilde)
         Phi = X2 @ Vr @ Sinv @ eVecs  # DMD modes
 
-        lambda_vals = eVals
-        omega = np.log(lambda_vals)
+        omega = np.log(eVals)
         Omega_continuous[:, k] = omega
         Omega[:, k] = np.abs(omega)
 
@@ -88,7 +123,7 @@ def dmd_with_separation(video, T, r, p):
         cutoff = 0.01
         bg = np.where(np.abs(omega) < cutoff)[0]
 
-        bg_ev = 1j * np.imag(np.log(lambda_vals[bg]))
+        bg_ev = 1j * np.imag(np.log(eVals[bg]))
         Phi_bg = Phi[:, bg]
 
         win_mid = (tgrid[k] + tgrid[k + T - 1]) / 2.0
@@ -104,9 +139,9 @@ def dmd_with_separation(video, T, r, p):
 
         GaussSum += np.exp(-(tgrid - win_mid) ** 2 / sig ** 2)
 
-    x_bg = x_bg / GaussSum[np.newaxis, :]
+    x_bg = x_bg / (GaussSum[np.newaxis, :] + 1e-10)
 
-    # Make result real and positive
+    # Make result real and non-negative
     x_fg = video_mat - np.abs(x_bg)
     neg_mask = x_fg < 0
     R = x_fg * neg_mask
